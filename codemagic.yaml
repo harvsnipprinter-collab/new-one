@@ -1,0 +1,45 @@
+# Build an unsigned iPhone/iPad IPA for installation with Sideloadly.
+# Add this file to the ROOT of the SculptForge GitHub repository.
+workflows:
+  sculptforge-unsigned-ios:
+    name: SculptForge — unsigned IPA (Sideloadly)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: latest
+    scripts:
+      - name: Install XcodeGen and generate project
+        script: |
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen generate
+          xcodebuild -version
+      - name: Install missing Metal shader toolchain
+        script: |
+          # Xcode 26 can ship without the optional Metal compiler component.
+          # Without this, compiling App/Render/Shaders.metal fails with exit code 65.
+          xcodebuild -downloadComponent MetalToolchain
+          xcrun --find metal
+      - name: Archive iOS device app (no signing)
+        script: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild archive \
+            -project SculptForge.xcodeproj \
+            -scheme SculptForge \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$CM_BUILD_DIR/build/SculptForge.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tee build/archive.log
+      - name: Package unsigned IPA
+        script: |
+          bash Scripts/make_ipa.sh \
+            "$CM_BUILD_DIR/build/SculptForge.xcarchive" \
+            "$CM_BUILD_DIR/build/SculptForge-unsigned.ipa"
+          unzip -t build/SculptForge-unsigned.ipa
+    artifacts:
+      - build/SculptForge-unsigned.ipa
+      - build/archive.log
