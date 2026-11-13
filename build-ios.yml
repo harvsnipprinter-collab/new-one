@@ -1,0 +1,78 @@
+# Builds SculptForge on a GitHub-hosted Mac: engine tests, simulator build + launch check, unsigned IPA.
+# The IPA is unsigned on purpose: sign it with your own Apple ID (for example with Sideloadly or AltStore).
+name: Build iOS app
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Engine tests (C++)
+        run: |
+          CXX=clang++ bash Scripts/build_engine.sh
+          ./build/sf_tests build/test_output | tee build/engine-tests.txt
+          node Tools/validate_exports.mjs build/test_output | tee build/export-validation.txt
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+          xcodebuild -version
+
+      - name: Build for iOS Simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project SculptForge.xcodeproj -scheme SculptForge -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO build | tee build/simulator-build.log | tail -n 60
+
+      - name: Launch in Simulator and take a screenshot
+        continue-on-error: true
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for k in sorted(d, reverse=True) if 'iOS' in k for x in d[k] if 'iPad' in x['name']))")
+          echo "Using simulator $UDID"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" build/dd/Build/Products/Debug-iphonesimulator/SculptForge.app
+          xcrun simctl launch "$UDID" com.sculptforge.app
+          sleep 20
+          xcrun simctl io "$UDID" screenshot build/simulator-launch.png
+          xcrun simctl spawn "$UDID" launchctl list | grep -i sculptforge && echo "APP IS RUNNING" | tee build/launch-check.txt
+          xcrun simctl shutdown "$UDID"
+
+      - name: Archive for devices (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild archive -project SculptForge.xcodeproj -scheme SculptForge -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -archivePath build/SculptForge.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" | tee build/archive.log | tail -n 40
+
+      - name: Package unsigned IPA
+        run: bash Scripts/make_ipa.sh build/SculptForge.xcarchive build/SculptForge-unsigned.ipa
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build/*.log
+            build/*.txt
+            build/simulator-launch.png
+          if-no-files-found: ignore
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SculptForge-unsigned-ipa
+          path: build/SculptForge-unsigned.ipa
