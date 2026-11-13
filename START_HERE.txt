@@ -1,0 +1,13 @@
+METAL TOOLCHAIN FIX
+
+Extract this ZIP. Replace codemagic.yaml in GitHub with the entire file from
+this folder, commit it, then start a new Codemagic build on that branch.
+
+The previous check only located the metal launcher; it did not establish that
+the Metal toolchain was installed. This version compiles the actual app shaders
+and links a Metal library. If that fails, it downloads the toolchain, clears
+the tool lookup cache and repeats compilation and linking before archiving.
+
+The missing-source recovery from the previous fix is still included.
+Validated locally: shell/YAML syntax, source recovery, and mocked Metal setup
+success/failure paths. A real iOS archive cannot be run on this Linux host.
